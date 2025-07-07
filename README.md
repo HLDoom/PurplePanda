@@ -5,6 +5,22 @@ This tool fetches resources from different cloud/saas applications focusing on p
 
 The name comes from the animal **Red Panda**. This panda eats peas, just like Purple Panda, which can ingest API keys/tokens found by these **[PEASS](https://github.com/carlospolop/PEASS-ng)**. The color was changed to purple because this tool is meant mainly for **Purple Teams** (because it can be **highly useful for both Blue and Red Teams**).
 
+## About this fork
+This fork is part of my bachelor thesis titled:
+
+"Red-Team-Sicherheitsanalysen in Kubernetes: Weiterentwicklung des graphbasierten Tools PurplePanda"
+\[Red Team security analyses in Kubernetes: Advancement of the graph-based tool PurplePanda\]
+
+As part of my thesis I am attempting to expand the k8s related capabilites of PurplePanda. This potentially includes:
+- Covering more types of ressources (such as NetworkPolicies, Gatekeeper constraints etc.)
+- Moving to queries for relations (as per TODO), allowing for several different kinds of relations
+- Including some more detailed properties about the ressources in the nodes
+
+I am certain the node based approach lends itself to way more than just plain priv-esc. In my experience, having an interactive graph-db makes inspecting clusters way more intuitive and insightful.
+
+This tool is intended for educational and authorized testing purposes only.
+Any use of this software is done at your own risk and responsibility.
+
 ## How to use
 Each folder inside `/intel` defines one platform that can be enumerated and **contains a README.md file explaining how to use that specific module**.
 
