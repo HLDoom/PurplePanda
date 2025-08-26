@@ -195,7 +195,7 @@ class AnalyzeResults(K8sDisc):
 
                 privect_to_objs[ppal_obj["ppal_obj"].__primaryvalue__] = {
                     "ppal_obj": ppal_obj["ppal_obj"],
-                    "reason": f"The {'ClusterRole' if res_obj.name == affected_resource_name else 'Role'} '{role_name}' assigned by the binding '{bind_name}' fullfil the necessary privesc permissions '{', '.join(verbs)}' with the set of permissions '{', '.join(rel_verbs)}' over the resource '{res_obj.name}'. {ppal_obj['extra_reason']}",
+                    "reason": f"The {'ClusterRole' if res_obj.name == affected_resource_name else 'Role'} '{role_name}' assigned by the binding '{bind_name}' fulfill the necessary privesc permissions '{', '.join(verbs)}' with the set of permissions '{', '.join(rel_verbs)}' over the resource '{res_obj.name}'. {ppal_obj['extra_reason']}",
                     "escape_to_node": res_obj.name in privescs_to_node_resources
                 }
         
