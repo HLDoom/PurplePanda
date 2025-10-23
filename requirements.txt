@@ -1,6 +1,7 @@
 google-api-python-client
 pyyaml
 py2neo
+pansi==2020.7.3
 shodan
 pygithub
 kubernetes

@@ -5,12 +5,21 @@
     "version": "0.2.0",
     "configurations": [
         {
-            "name": "Python: Current File",
-            "type": "python",
+            "name": "K8s launch scan",
+            "type": "debugpy",
             "request": "launch",
             "program": "main.py",
             "console": "integratedTerminal",
-            "args": ["-e", "--platforms", "google", "-d", "/tmp"],
+            "args": ["-e", "--platforms", "k8s", "-d", "/tmp/purplePandaScan", "--k8s-get-secret-values"],
+            "justMyCode": true
+        },
+        {
+            "name": "Google launch scan",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "main.py",
+            "console": "integratedTerminal",
+            "args": ["-e", "--platforms", "google", "-d", "/tmp/purplePandaScan"],
             "justMyCode": true
         }
     ]
