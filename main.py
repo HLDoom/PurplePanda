@@ -26,6 +26,34 @@ from intel.concourse.discovery.concourse_disc_client import ConcourseDiscClient
 from intel.circleci.discovery.circleci_disc_client import CircleCIDiscClient
 
 
+def run_reanalysis(nmap=False, directory=None):
+    """
+    Re-analyze existing data in the database without re-discovering assets.
+    
+    Args:
+        nmap (bool): Whether to perform nmap scanning on public IPs
+        directory (str): Directory to save CSV analysis results
+    """
+    logger.info("Starting re-analysis of existing data in the database...")
+    
+    # Perform a combined analysis of existing data
+    flags = {'nmap': nmap}
+    AnalyzeResults().discover(flags)
+
+    # If directory specified write some analysis in CSV files
+    if directory:
+        currently_available = PurplePandaConfig().platforms
+        write_csv_functions = []
+        for plat_name in currently_available:
+            write_csv_functions.append((PurplePanda().write_analysis, plat_name, {
+                "name": plat_name, "directory": directory
+            }))
+        
+        PurplePanda().start_discovery(write_csv_functions, writing_analysis=True)
+    
+    print("Re-analysis finished!")
+
+
 logger = logging.getLogger("main")
 logging.getLogger("googleapiclient.http").setLevel(logging.ERROR)
 logging.getLogger("google.auth._default").setLevel(logging.ERROR)
@@ -42,7 +70,7 @@ def main():
 
     help_msg=f"""Enumerate different cloud platforms.\n
     Platforms available: {currently_available_str}.\n
-    You need to indicate '-e' or '-a' at least.\n
+    You need to indicate '-e', '-a', or '-r' at least.\n
     Google: The tool will try to get info about all the supported resources and find privesc paths within kubernetes and with other clouds/SaaS\n
     Gihub: By default, all the organizations and users the tokens belongs to will be analyzed. If you just want to analyze specified organizations in the tokens, check the '--github-*' params.\n
     Kubernetes: The tool will try to get info about all the supported resources and find privesc paths within kubernetes and with other clouds/SaaS.\n
@@ -50,7 +78,8 @@ def main():
     parser = argparse.ArgumentParser(description=help_msg)
     parser.add_argument('-a', '--analyze', action='store_true', default=False, required=False, help=f'Fast analysis of the indicated (comma-separated) platform credentials.')
     parser.add_argument('-e', '--enumerate', action='store_true', default=False, required=False, help=f'Enumerate the assets of the indicated (comma-separated) platforms.')
-    parser.add_argument('-p', '--platforms', type=str, required=True, help=f'Comma-separated list of platforms to analyze/enumerate. Currently available: {currently_available_str}')
+    parser.add_argument('-r', '--reanalyze', action='store_true', default=False, required=False, help=f'Re-analyze existing data in the database without re-discovering assets.')
+    parser.add_argument('-p', '--platforms', type=str, required=False, help=f'Comma-separated list of platforms to analyze/enumerate. Currently available: {currently_available_str}')
     parser.add_argument('-v', '--verbose', action='store_true', default=False, required=False, help=f'Do not remove the progress bar when the task is done')
     parser.add_argument('-d', '--directory', type=str, required=False, help=f'Path to the directory to save an initial analysis of the results in CVS (separator="|") format. If you don\'t indicate any, no analysis will be written to disk')
     parser.add_argument('-n','--nmap',action='store_true', default=False, required=False, help=f'Perform full port scan on the public IP addresses using Nmap')
@@ -68,14 +97,15 @@ def main():
     parser.add_argument('--gcp-get-kms', action='store_true', default=False, required=False, help=f'Enumerate KMS (need to check every location on each project), might some hours)')
 
     args = parser.parse_args()
-    platforms = args.platforms.lower().split(",")
+    platforms = args.platforms.lower().split(",") if args.platforms else []
     analyze = args.analyze
     plat_enumerate = args.enumerate
+    reanalyze = args.reanalyze
     directory = args.directory
     nmap = args.nmap
 
-    if not analyze and not plat_enumerate:
-        logger.error(f"Error: Indicate '-a' or '-e'")
+    if not analyze and not plat_enumerate and not reanalyze:
+        logger.error(f"Error: Indicate '-a', '-e', or '-r'")
         parser.print_help()
         sys.exit(1)
 
@@ -111,25 +141,37 @@ def main():
             parser.print_help()
             sys.exit(1)
 
-    # Configuration parsing checks
-    if "google" in platforms: GcpDiscClient()
-    if "github" in platforms: GithubDiscClient()
-    if "k8s" in platforms: K8sDiscClient()
-    if "concourse" in platforms: ConcourseDiscClient()
-    if "circleci" in platforms: CircleCIDiscClient()
-
+    # Configuration parsing checks - only needed for analyze and enumerate modes
     if analyze: # When -a is passed as argument
+        if not platforms:
+            logger.error(f"Error: Platforms are required for analysis")
+            sys.exit(1)
         if "google" in platforms: PurplePandaGoogle().analyze_creds()
         if "github" in platforms: PurplePandaGithub().analyze_creds()
         if "k8s" in platforms: PurplePandaK8s().analyze_creds()
         if "concourse" in platforms: PurplePandaConcourse().analyze_creds()
         if "circleci" in platforms: PurplePandaCircleCI().analyze_creds()
-
+    
     elif not os.getenv("PURPLEPANDA_NEO4J_URL") or not os.getenv("PURPLEPANDA_PWD"):
         # Cannot connect to database so finish here, (the error messages are shown from core.db.customogm)
         sys.exit(1)
 
+    elif reanalyze: # When -r is passed as argument
+        if not directory:
+            logger.error(f"Error: Output directory is required for reanalysis")
+            sys.exit(1)
+        run_reanalysis(nmap=nmap, directory=directory)
+
     elif plat_enumerate: # When -e is passed in argument
+        if not platforms:
+            logger.error(f"Error: Platforms are required for enumeration")
+            sys.exit(1)
+        if "google" in platforms: GcpDiscClient()
+        if "github" in platforms: GithubDiscClient()
+        if "k8s" in platforms: K8sDiscClient()
+        if "concourse" in platforms: ConcourseDiscClient()
+        if "circleci" in platforms: CircleCIDiscClient()
+
         # Launch each SaaS discovery module in its own thread (we cannot use diffrent process or they will figth for the progress bar of "rich")
         functions = [] #This will be a list of functions that will be called
         functions2 = []

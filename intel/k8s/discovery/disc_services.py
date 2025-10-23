@@ -37,11 +37,11 @@ class DiscServices(K8sDisc):
         ns_obj = kwargs["ns_obj"]
         ns_name = ns_obj.name
         cluster_ips = [service.spec.cluster_ip] if service.spec.cluster_ip else []
-        if hasattr(service.spec, "cluster_i_ps") and service.spec.cluster_i_ps:
+        if hasattr(service.spec, "cluster_ips") and service.spec.cluster_ips:
             # Create array of non-repeated IPs
-            for ip in service.spec.cluster_i_ps:
+            for ip in service.spec.cluster_ips:
                 if not ip in cluster_ips:
-                    cluster_ips.add(ip)
+                    cluster_ips.append(ip)
         
         ports = []
         if hasattr(service.spec, "ports") and service.spec.ports:
@@ -77,19 +77,20 @@ class DiscServices(K8sDisc):
         service_obj.save()
         
         # Get external ips
-        if service.spec.external_i_ps:
-            for ip in service.spec.external_i_ps:
+        if hasattr(service.spec, 'external_ips') and service.spec.external_ips:
+            for ip in service.spec.external_ips:
                 pip_obj = PublicIP(name=ip).save()
                 service_obj.public_ips.update(pip_obj)
             
             service_obj.save()
         
         # Get external domain
-        if service.spec.external_name:
+        if hasattr(service.spec, 'external_name') and service.spec.external_name:
             dom_obj = PublicDomain(name=service.spec.external_name).save()
             service_obj.public_domains.update(dom_obj)
             service_obj.save()
         
+        # Handle LoadBalancer status
         if service.status:
             if service.status.load_balancer:
                 if service.status.load_balancer.ingress:
@@ -102,6 +103,9 @@ class DiscServices(K8sDisc):
                             service_obj.public_domains.update(dom_obj)
                 
                 service_obj.save()
+        
+        # For NodePort services, they are potentially externally accessible
+        # We don't add a specific IP since they use the node IPs, but the service type indicates exposure
         
         # Get resources using the service
         self._pod_selector(service_obj, service.spec.selector)
