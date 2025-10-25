@@ -10,7 +10,7 @@
             "request": "launch",
             "program": "main.py",
             "console": "integratedTerminal",
-            "args": ["-e", "--platforms", "k8s", "-d", "/tmp/purplePandaScan", "--k8s-get-secret-values"],
+            "args": ["-e", "--platforms", "k8s", "-d", "/tmp", "--k8s-get-secret-values"],
             "justMyCode": true
         },
         {
@@ -19,7 +19,7 @@
             "request": "launch",
             "program": "main.py",
             "console": "integratedTerminal",
-            "args": ["-e", "--platforms", "google", "-d", "/tmp/purplePandaScan"],
+            "args": ["-e", "--platforms", "google", "-d", "/tmp"],
             "justMyCode": true
         }
     ]
