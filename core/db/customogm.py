@@ -74,7 +74,7 @@ class CustomOGM(GraphObject):
         if all_objs.exists():
             return all_objs.all()
         
-        logger.warning(f"Objects of class {cls} where searched for but nothing was found")
+        logger.warning(f"Objects of class {cls} were searched for but nothing was found")
         return []
     
     @classmethod
