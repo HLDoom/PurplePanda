@@ -14,6 +14,15 @@
             "justMyCode": true
         },
         {
+            "name": "K8s launch scan (Debug all)",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "main.py",
+            "console": "integratedTerminal",
+            "args": ["-e", "--platforms", "k8s", "-d", "/tmp", "--k8s-get-secret-values"],
+            "justMyCode": false
+        },
+        {
             "name": "Google launch scan",
             "type": "debugpy",
             "request": "launch",
