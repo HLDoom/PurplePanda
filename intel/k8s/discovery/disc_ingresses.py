@@ -5,7 +5,6 @@ from typing import List
 from intel.k8s.discovery.k8s_disc import K8sDisc
 from intel.k8s.models.k8s_model import K8sNamespace, K8sService, K8sIngress, K8sSecret
 from core.models.models import PublicIP, PublicDomain
-from core.db.customogm import CustomOGM
 
 class DiscIngresses(K8sDisc):
     logger = logging.getLogger(__name__)

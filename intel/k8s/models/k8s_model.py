@@ -212,6 +212,8 @@ class K8sPod(K8sContainsContainer, GcpRunningSA):
     services_attached = RelatedTo("K8sPod", "HAS_SERVICE")
     containspodtemplate = RelatedTo("K8sPodTemplate", "PART_OF")
     concourse_workers = RelatedTo("ConcourseWorker", "RUN_CONCOURSE")
+    can_connect_to = RelatedTo("K8sPod", "CAN_CONNECT")
+    network_policies = RelatedFrom("K8sNetworkPolicy", "APPLIES_TO")
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -571,3 +573,20 @@ class K8sMutatingWebhookConfig(K8sBasicModelNS):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
+
+
+class K8sNetworkPolicy(K8sBasicModelNS):
+    __primarylabel__ = "K8sNetworkPolicy"
+    __primarykey__ = "name"
+
+    policy_types = Property()
+    pod_selector = Property()
+    ingress_rules = Property()
+    egress_rules = Property()
+    applies_to_pods = RelatedTo(K8sPod, "APPLIES_TO")
+
+    k8s = Label(name="K8s")
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.k8s = True

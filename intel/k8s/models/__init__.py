@@ -24,7 +24,8 @@ from .k8s_model import (
     K8sContainerPort,
     K8sReplicationController,
     K8sReplicaSet,
-    K8sMutatingWebhookConfig
+    K8sMutatingWebhookConfig,
+    K8sNetworkPolicy
 )
 
 __all__ = [
@@ -53,5 +54,6 @@ __all__ = [
     "K8sContainerPort",
     "K8sReplicationController",
     "K8sReplicaSet",
-    "K8sMutatingWebhookConfig"
+    "K8sMutatingWebhookConfig",
+    "K8sNetworkPolicy"
 ]

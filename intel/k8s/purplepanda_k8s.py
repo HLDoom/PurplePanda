@@ -22,6 +22,7 @@ from intel.k8s.discovery.disc_services import DiscServices
 from intel.k8s.discovery.disc_ingresses import DiscIngresses
 from intel.k8s.discovery.disc_mutatingwebhookconfigurations import DiscMutatingWebhookConfigurations
 from intel.k8s.discovery.disc_configmaps import DiscConfigMaps
+from intel.k8s.discovery.disc_networkpolicies import DiscNetworkPolicies
 from intel.k8s.discovery.analyze_results import AnalyzeResults
 
 
@@ -53,6 +54,9 @@ class PurplePandaK8s():
                            DiscSecrets(cred["cred"], cred["config"], **kwargs).discover,
                         ],
                         [
+                            DiscNetworkPolicies(cred["cred"], cred["config"], **kwargs).discover,
+                        ],
+                        [
                            DiscDeployments(cred["cred"], cred["config"], **kwargs).discover,
                         ],
                         [
@@ -74,7 +78,7 @@ class PurplePandaK8s():
                             DiscConfigMaps(cred["cred"], cred["config"], **kwargs).discover,
                         ],
                         [
-                           DiscCurrentPerms(cred["cred"], cred["config"], **kwargs).discover, 
+                           DiscCurrentPerms(cred["cred"], cred["config"], **kwargs).discover,
                            DiscRoles(cred["cred"], cred["config"], **kwargs).discover
                         ]
                     ],
