@@ -51,7 +51,7 @@ class DiscNetworkPolicies(K8sDisc):
 
         # Create network policy object
         netpol_obj = K8sNetworkPolicy(
-            name = f"{ns_obj.ns_name}:{policy.metadata.name}",
+            name = f"{ns_obj.name}:{policy.metadata.name}",
             uid = policy.metadata.uid,
             labels = json.dumps(policy.metadata.labels),
             annotations = json.dumps(policy.metadata.annotations),

@@ -67,13 +67,13 @@ class K8sDisc(K8sDiscClient):
         return True
 
     @staticmethod
-    def _eval_labelSelector(label_selector: dict, pod) -> bool:
+    def _eval_labelSelector(label_selector: client.V1LabelSelector, obj) -> bool:
         """
         Evaluate if a pod matches a V1LabelSelector.
 
         Args:
-            label_selector: Dict representation of V1LabelSelector with 'matchLabels' and/or 'matchExpressions'
-            pod: Pod object with a 'labels' field (JSON string of labels)
+            label_selector: a V1LabelSelector
+            obj: basically any object with a 'labels' field (JSON string of labels)
 
         Returns:
             True if pod matches the selector, False otherwise
@@ -81,14 +81,14 @@ class K8sDisc(K8sDiscClient):
         Kubernetes label selector logic:
         - Empty selector {} matches all pods
         - None/null selector matches no pods
-        - matchLabels: all labels must match (AND logic)
+        - matchLabels: all labels must match (including value)
         - matchExpressions: all expressions must match (AND logic)
-        - matchLabels AND matchExpressions are also ANDed together
+        - finally - matchLabels AND matchExpressions
         """
 
         # Parse pod labels (stored as JSON string)
         try:
-            pod_labels = json.loads(pod.labels) if pod.labels else {}
+            pod_labels = json.loads(obj.labels) if obj.labels else {}
         except Exception:
             pod_labels = {}
 
@@ -97,18 +97,17 @@ class K8sDisc(K8sDiscClient):
             return False
 
         # Handle empty selector - matches everything
-        if not label_selector or (not label_selector.get('matchLabels') and not label_selector.get('matchExpressions')):
+        if not label_selector or (not label_selector.get("match_labels") and not label_selector.get("match_expressions")):
             return True
 
         # Check matchLabels
-        match_labels = label_selector.get('matchLabels', {})
-        if match_labels:
-            for key, value in match_labels.items():
+        if label_selector.get("match_labels"):
+            for key, value in label_selector.match_labels.items():
                 if pod_labels.get(key) != value:
                     return False
 
         # Check matchExpressions
-        match_expressions = label_selector.get('matchExpressions', [])
+        match_expressions = label_selector.get('match_expressions')
         if match_expressions:
             for expr in match_expressions:
                 key = expr.get('key')

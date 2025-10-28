@@ -342,40 +342,40 @@ class AnalyzeResults(K8sDisc):
         self.logger.info("Analyzing network policies for pod connectivity across entire cluster")
 
         # Get pods from all namespaces
-        self.all_pods: list[client.V1Pod] = K8sPod.get_all_by_kwargs(f'_.name =~ "{str(self.cluster_id)}-.*"')
+        all_pods: list[client.V1Pod] = K8sPod.get_all_by_kwargs(f'_.name =~ "{str(self.cluster_id)}-.*"')
         
-        if not self.all_pods:
+        if not all_pods:
             self.logger.debug("No pods found in cluster?")
             return
 
         # Get network policies from all namespaces
-        self.all_netPols: list[client.V1NetworkPolicy] = K8sNetworkPolicy.get_all_by_kwargs(f'_.name =~ "{str(self.cluster_id)}-.*"')
+        all_netPols: list[client.V1NetworkPolicy] = K8sNetworkPolicy.get_all_by_kwargs(f'_.name =~ "{str(self.cluster_id)}-.*"')
 
         # Shortcut
-        if not self.all_netPols:
+        if not all_netPols:
             self.logger.info("No network policies in cluster!")
-            for source_pod in self.all_pods:
-                for dest_pod in self.all_pods:
+            for source_pod in all_pods:
+                for dest_pod in all_pods:
                     if source_pod.name != dest_pod.name:
                         self._create_connection(source_pod, dest_pod)
             return
         
         # match netPols to pods
-        for pod in self.all_pods:
-            pod.netPols = []
-            pod.isolatedEgress = False
-            pod.isolatedIngress = False
-
-            pod_ns = sourcePod.name.split(":")[0]
+        for netPol in all_netPols:
             
-            for netPol in self.all_netPols:
-                netPol_ns = netPol.name.split(":")[0]
+            netPol_ns = netPol.name.split(":")[0]
+            podSelector: client.V1LabelSelector = json.loads(netPol.pod_selector)
+            
+            for pod in all_pods:
+                
+                pod.netPols = []
+                pod.isolatedEgress = False
+                pod.isolatedIngress = False
+                pod_ns = pod.name.split(":")[0]
 
                 # check if pol is in netPol NS
                 if pod_ns != netPol_ns:
                     continue
-
-                podSelector: client.V1LabelSelector = json.loads(netPol.pod_selector)
 
                 # Creating netPol relationships to pods & checking for pod isolation
                 if K8sDisc._eval_labelSelector(podSelector, pod):
@@ -391,8 +391,8 @@ class AnalyzeResults(K8sDisc):
                             pod.isolatedEgress = True
 
         # check all pod pairs for connectivity
-        for sourcePod in self.all_pods:
-            for destPod in self.all_pods:
+        for sourcePod in all_pods:
+            for destPod in all_pods:
                 if sourcePod is not destPod:
             
                     matchingEgress = False
