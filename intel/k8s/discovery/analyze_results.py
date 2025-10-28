@@ -6,7 +6,7 @@ import json
 from intel.k8s.models.k8s_model import *
 from .k8s_disc import K8sDisc
 from core.db.customogm import graph
-
+from kubernetes import client
 
 class AnalyzeResults(K8sDisc):
     logger = logging.getLogger(__name__)
@@ -342,14 +342,14 @@ class AnalyzeResults(K8sDisc):
         self.logger.info("Analyzing network policies for pod connectivity across entire cluster")
 
         # Get pods from all namespaces
-        self.all_pods = K8sPod.get_all_by_kwargs(f'_.name =~ "{str(self.cluster_id)}-.*"')
+        self.all_pods: list[client.V1Pod] = K8sPod.get_all_by_kwargs(f'_.name =~ "{str(self.cluster_id)}-.*"')
         
         if not self.all_pods:
             self.logger.debug("No pods found in cluster?")
             return
 
         # Get network policies from all namespaces
-        self.all_netPols = K8sNetworkPolicy.get_all_by_kwargs(f'_.name =~ "{str(self.cluster_id)}-.*"')
+        self.all_netPols: list[client.V1NetworkPolicy] = K8sNetworkPolicy.get_all_by_kwargs(f'_.name =~ "{str(self.cluster_id)}-.*"')
 
         # Shortcut
         if not self.all_netPols:
@@ -362,6 +362,10 @@ class AnalyzeResults(K8sDisc):
         
         # match netPols to pods
         for pod in self.all_pods:
+            pod.netPols = []
+            pod.isolatedEgress = False
+            pod.isolatedIngress = False
+
             pod_ns = sourcePod.name.split(":")[0]
             
             for netPol in self.all_netPols:
@@ -371,377 +375,49 @@ class AnalyzeResults(K8sDisc):
                 if pod_ns != netPol_ns:
                     continue
 
-                # if netPol selects pod
-                # get netPol.podSelector (LabelSelector), check if podLabels match LabelSelector
-                
-                    # if yes, add netPol to pod.netPols[]
+                podSelector: client.V1LabelSelector = json.loads(netPol.pod_selector)
 
-        # check all pods
+                # Creating netPol relationships to pods & checking for pod isolation
+                if K8sDisc._eval_labelSelector(podSelector, pod):
+                    netPol.applies_to.update(pod)
+                    netPol.save()
+                    # store for faster lookup
+                    pod.netPols.append(netPol)
+
+                    for policyType in netPol.spec.policy_types:
+                        if policyType == "Ingress":
+                            pod.isolatedIngress = True
+                        if policyType == "Egress":
+                            pod.isolatedEgress = True
+
+        # check all pod pairs for connectivity
         for sourcePod in self.all_pods:
-
-            sourcePod_ns = sourcePod.name.split(":")[0]
-            sourcePod.egress_isolated = self._is_pod_egress_isolated(sourcePod)
-
-
-
-
             for destPod in self.all_pods:
-                
-                destPod_ns = sourcePod.name.split(":")[0]
-                destPod.ingress_isolated = self._is_pod_ingress_isolated(sourcePod)
-
-                if source_pod != dest_pod and self._is_connection_allowed(source_pod, dest_pod):
-                    self._create_connection(source_pod, dest_pod)
-
-
-######################################################
-################## shit below ########################
-######################################################
-        # For each pod pair check if connection is allowed
-        for source_pod in self.all_pods:
-            for dest_pod in self.all_pods:
-                if source_pod.name != dest_pod.name:
-                    if self._is_connection_allowed(source_pod, dest_pod):
-                        self._create_connection(source_pod, dest_pod)
-
-
-    def _is_connection_allowed(self, source_pod, dest_pod):
-        """
-        Check if connection from source to dest is allowed.
-        1. Source pod's egress allows it (if source is egress-isolated)
-        2. Dest pod's ingress allows it (if dest is ingress-isolated)
-        """
-
-        # Check if source is egress-isolated (using pre-computed value)
-        if source_pod.egress_isolated:
-            # Source has egress restrictions, check if egress to dest is allowed
-            if not self._is_egress_allowed(source_pod, dest_pod):
-                return False
-
-        # Check if dest is ingress-isolated (using pre-computed value)
-        if dest_pod.ingress_isolated:
-            # Dest has ingress restrictions, check if ingress from source is allowed
-            if not self._is_ingress_allowed(source_pod, dest_pod):
-                return False
-
-        return True
-
-
-    def _is_pod_ingress_isolated(self, pod):
-        """
-        Check if a pod is ingress-isolated.
-        A pod is ingress-isolated if ANY NetworkPolicy in pod's namespace selects it and has 'Ingress' in policyTypes.
-        """
-        pod_ns = pod.name.split(":")[0]
-
-        for policy in self.all_netPols:
-            if policy.name.split(":")[0] != pod_ns:
-                continue
-
-            if self._policy_selects_pod(policy, pod):
-                policy_types = policy.policy_types if policy.policy_types else []
-                # Check if Ingress is explicitly in policyTypes
-                if "Ingress" in policy_types:
-                    return True
-                
-        return False
-
-
-    def _is_pod_egress_isolated(self, pod):
-        """
-        Check if a pod is egress-isolated.
-        A pod is egress-isolated if ANY NetworkPolicy in pod's namespace selects it and has 'Egress' in policyTypes.
-        """
-        pod_ns = pod.name.split(":")[0]
-
-        for policy in self.all_netPols:
-            if policy.name.split(":")[0] != pod_ns:
-                continue
-
-            if self._policy_selects_pod(policy, pod):
-                policy_types = policy.policy_types if policy.policy_types else []
-                # Check if Egress is explicitly in policyTypes
-                if "Egress" in policy_types:
-                    return True
-
-        return False
-
-
-    def _is_ingress_allowed(self, source_pod, dest_pod):
-        """
-        Check if ingress from source to dest is allowed by dest's ingress policies.
-        Policies are ADDITIVE: if ANY policy allows it, it's allowed.
-        """
-        dest_pod_ns = dest_pod.name.split(":")[0]
-
-        for policy in self.all_netPols:
-            policy_ns = policy.name.split(":")[0]
-            if policy_ns != dest_pod_ns:
-                continue
-
-            if not self._policy_selects_pod(policy, dest_pod):
-                continue
-
-            policy_types = policy.policy_types if policy.policy_types else []
-            if "Ingress" not in policy_types and not (policy.policy_types == [] and policy.ingress_rules):
-                continue
-
-            # Empty ingress rules with Ingress policyType = deny all
-            try:
-                ingress_rules = json.loads(policy.ingress_rules) if policy.ingress_rules else []
-            except Exception as e:
-                self.logger.warning(f"Failed to parse ingress_rules for policy {policy.name}: {e}")
-                ingress_rules = []
-            if not ingress_rules:
-                # Policy selects this pod and has Ingress in policyTypes but no rules = deny all for this policy
-                # Continue checking other policies
-                continue
-
-            for rule in ingress_rules:
-                from_selectors = rule.get("from", [])
-                if not from_selectors:
-                    return True
-
-                for selector in from_selectors:
-                    if self._pod_matches_peer_selector(source_pod, selector, policy_ns):
-                        return True
-
-        return False
-
-
-    def _is_egress_allowed(self, source_pod, dest_pod):
-        """
-        Check if egress from source to dest is allowed by source's egress policies.
-        Policies are ADDITIVE: if ANY policy allows it, it's allowed.
-        """
-        source_pod_ns = source_pod.name.split(":")[0]
-
-        for policy in self.all_netPols:
-            policy_ns = policy.name.split(":")[0]
-            if policy_ns != source_pod_ns:
-                continue
-
-            if not self._policy_selects_pod(policy, source_pod):
-                continue
-
-            policy_types = policy.policy_types if policy.policy_types else []
-            if "Egress" not in policy_types and not (policy.policy_types == [] and policy.egress_rules):
-                continue
-
-            # Empty egress rules with Egress policyType = deny all
-            try:
-                egress_rules = json.loads(policy.egress_rules) if policy.egress_rules else []
-            except Exception as e:
-                self.logger.warning(f"Failed to parse egress_rules for policy {policy.name}: {e}")
-                egress_rules = []
-            if not egress_rules:
-                # Policy selects this pod and has Egress in policyTypes but no rules = deny all for this policy
-                # Continue checking other policies
-                continue
-
-            for rule in egress_rules:
-                to_selectors = rule.get("to", [])
-                if not to_selectors:
-                    return True
-
-                for selector in to_selectors:
-                    if self._pod_matches_peer_selector(dest_pod, selector, policy_ns):
-                        return True
-
-        return False
-
-
-    def _ip_matches_cidr(self, ip, cidr, except_cidrs=None):
-        """
-        Check if an IP address matches a CIDR block, excluding exception CIDRs.
-
-        Args:
-            ip: IP address to check
-            cidr: CIDR block to match against
-            except_cidrs: List of CIDR blocks to exclude
-        """
-        try:
-            import ipaddress
-            ip_obj = ipaddress.ip_address(ip)
-            network = ipaddress.ip_network(cidr)
-
-            # Check if IP is in the main CIDR
-            if ip_obj not in network:
-                return False
-
-            # Check if IP is in any exception CIDR
-            if except_cidrs:
-                for except_cidr in except_cidrs:
-                    except_network = ipaddress.ip_network(except_cidr)
-                    if ip_obj in except_network:
-                        return False
-
-            return True
-        except Exception as e:
-            self.logger.warning(f"Failed to check IP {ip} against CIDR {cidr}: {e}")
-            return False
-
-    def _pod_matches_peer_selector(self, pod, peer_selector, policy_ns):
-        """
-        Check if a pod matches a network policy peer selector (from/to).
-
-        - podSelector alone: matches pods in policy's namespace only
-        - namespaceSelector alone: matches all pods in matching namespaces
-        - both: matches specific pods in matching namespaces
-        - ipBlock: matches pods based on their IP address (if available)
-        """
-        pod_ns = pod.name.split(":")[0]
-        pod_ns_obj = K8sNamespace.get_by_kwargs(f'_.name = "{pod_ns}"')
-
-        # Handle ipBlock
-        if "ipBlock" in peer_selector:
-            ip_block = peer_selector["ipBlock"]
-            cidr = ip_block.get("cidr")
-            except_cidrs = ip_block.get("except", [])
-
-            # Check if pod has an IP address
-            pod_ip = getattr(pod, 'pod_ip')
-            if pod_ip:
-                return self._ip_matches_cidr(pod_ip, cidr, except_cidrs)
-            else:
-                # If pod doesn't have IP info, we can't evaluate ipBlock rules
-                # Log a warning and conservatively deny
-                self.logger.debug(f"Pod {pod.name} has no IP address, cannot evaluate ipBlock rule")
-                return False
-
-        # Handle podSelector
-        if "podSelector" in peer_selector:
-            pod_selector = peer_selector["podSelector"].get("matchLabels", {})
-            pod_match_expressions = peer_selector["podSelector"].get("matchExpressions")
-
-            # If there's also a namespaceSelector, pod must be in matching namespace
-            if "namespaceSelector" in peer_selector:
-                ns_selector = peer_selector["namespaceSelector"].get("matchLabels", {})
-                ns_match_expressions = peer_selector["namespaceSelector"].get("matchExpressions")
-                if not pod_ns_obj or not self._namespace_matches_selector(pod_ns_obj, ns_selector, ns_match_expressions):
-                    return False
-            else:
-                # podSelector alone: only matches pods in the policy's own namespace
-                if pod_ns != policy_ns:
-                    return False
-
-            # Check if pod matches the pod selector
-            return self._pod_matches_selector(pod, pod_selector, pod_match_expressions)
-
-        # Handle namespaceSelector without podSelector
-        elif "namespaceSelector" in peer_selector:
-            ns_selector = peer_selector["namespaceSelector"].get("matchLabels", {})
-            ns_match_expressions = peer_selector["namespaceSelector"].get("matchExpressions")
-            if pod_ns_obj:
-                return self._namespace_matches_selector(pod_ns_obj, ns_selector, ns_match_expressions)
-
-        return False
-
-
-    def _matches_label_selector_expression(self, labels, match_expression):
-        """
-        Check if labels match a single matchExpression.
-        Supports operators: In, NotIn, Exists, DoesNotExist
-        """
-        key = match_expression.get("key")
-        operator = match_expression.get("operator")
-        values = match_expression.get("values", [])
-
-        if operator == "In":
-            return labels.get(key) in values
-        elif operator == "NotIn":
-            return labels.get(key) not in values
-        elif operator == "Exists":
-            return key in labels
-        elif operator == "DoesNotExist":
-            return key not in labels
-        else:
-            self.logger.warning(f"Unknown matchExpression operator: {operator}")
-            return False
-
-    def _pod_matches_selector(self, pod, selector, match_expressions=None):
-        """
-        Check if a pod matches a label selector.
-        None = none selected
-        {} = all selected
-        """
-        # Null selector matches no objects
-        if selector is None and (match_expressions is None or len(match_expressions) == 0):
-            return False
-
-        # Empty dict selector and no expressions matches all objects
-        if selector == {} and (match_expressions is None or len(match_expressions) == 0):
-            return True
-
-        try:
-            pod_labels = json.loads(pod.labels) if pod.labels else {}
-        except:
-            pod_labels = {}
-
-        # All selector labels must match (matchLabels)
-        if selector:
-            for key, value in selector.items():
-                if pod_labels.get(key) != value:
-                    return False
-
-        # All match expressions must match (matchExpressions)
-        if match_expressions:
-            for expr in match_expressions:
-                if not self._matches_label_selector_expression(pod_labels, expr):
-                    return False
-
-        return True
-
-    def _policy_selects_pod(self, policy, pod):
-        """Check if a network policy selects a specific pod"""
-        try:
-            pod_selector = json.loads(policy.pod_selector) if policy.pod_selector else None
-        except Exception as e:
-            self.logger.warning(f"Failed to parse pod_selector for policy {policy.name}: {e}")
-            pod_selector = {}
-        return self._pod_matches_selector(pod, pod_selector)
-
-
-    def _namespace_matches_selector(self, namespace, selector, match_expressions=None):
-        """
-        Check if a namespace matches a label selector.
-
-        Args:
-            namespace: The namespace to check
-            selector: Dict of matchLabels (all must match - AND logic). None = no match, {} = match all
-            match_expressions: List of matchExpressions (all must match - AND logic). None or [] = ignored
-
-        Note: An empty label selector (selector={} and no match_expressions) matches all objects.
-              A null label selector (selector=None and match_expressions=None) matches no objects.
-        """
-        # Null selector matches no objects
-        if selector is None and (match_expressions is None or len(match_expressions) == 0):
-            return False
-
-        # Empty dict selector and no expressions matches all objects
-        if selector == {} and (match_expressions is None or len(match_expressions) == 0):
-            return True
-
-        try:
-            ns_labels = json.loads(namespace.labels) if namespace.labels else {}
-        except Exception as e:
-            self.logger.warning(f"Failed to parse namespace labels for {namespace.name}: {namespace.labels}. Error: {e}")
-            ns_labels = {}
-
-        # All selector labels must match (matchLabels)
-        if selector:
-            for key, value in selector.items():
-                self.logger.debug(f"Trying namespace match: key={key}, value={value}, nsVal={ns_labels.get(key)}, nsLabels={ns_labels}, match?={ns_labels.get(key) == value}")
-                if ns_labels.get(key) != value:
-                    return False
-
-        # All match expressions must match (matchExpressions)
-        if match_expressions:
-            for expr in match_expressions:
-                if not self._matches_label_selector_expression(ns_labels, expr):
-                    return False
-
-        return True
+                if sourcePod is not destPod:
+            
+                    matchingEgress = False
+                    matchingIngress = False
+            
+                    if sourcePod.isolatedEgress:
+                        for netPol in sourcePod.netPols:
+                            podSelector: client.V1LabelSelector = json.loads(netPol.pod_selector)
+                            if K8sDisc._eval_labelSelector(podSelector, destPod):
+                                matchingEgress = True
+                                break
+                    else:
+                        matchingEgress = True
+
+                    if destPod.isolatedIngress:
+                        for netPol in destPod.netPols:
+                            podSelector: client.V1LabelSelector = json.loads(netPol.pod_selector)
+                            if K8sDisc._eval_labelSelector(podSelector, sourcePod):
+                                matchingIngress = True
+                                break
+                    else:
+                        matchingIngress = True
+
+                    if matchingIngress and matchingEgress:
+                        self._create_connection(sourcePod, destPod)
 
     def _create_connection(self, source_pod, dest_pod):
         """Create a CAN_CONNECT relationship from source to destination pod"""
@@ -752,3 +428,355 @@ class AnalyzeResults(K8sDisc):
             self.logger.debug(f"Created CAN_CONNECT: {source_pod.name} -> {dest_pod.name}")
         except Exception as e:
             self.logger.error(f"Failed to create CAN_CONNECT relationship: {source_pod.name} -> {dest_pod.name}: {e}")
+
+
+#######################################################
+################### shit below ########################
+#######################################################
+#
+#        # For each pod pair check if connection is allowed
+#        for source_pod in self.all_pods:
+#            for dest_pod in self.all_pods:
+#                if source_pod.name != dest_pod.name:
+#                    if self._is_connection_allowed(source_pod, dest_pod):
+#                        self._create_connection(source_pod, dest_pod)
+#
+#
+#    def _is_connection_allowed(self, source_pod, dest_pod):
+#        """
+#        Check if connection from source to dest is allowed.
+#        1. Source pod's egress allows it (if source is egress-isolated)
+#        2. Dest pod's ingress allows it (if dest is ingress-isolated)
+#        """
+#
+#        # Check if source is egress-isolated (using pre-computed value)
+#        if source_pod.egress_isolated:
+#            # Source has egress restrictions, check if egress to dest is allowed
+#            if not self._is_egress_allowed(source_pod, dest_pod):
+#                return False
+#
+#        # Check if dest is ingress-isolated (using pre-computed value)
+#        if dest_pod.ingress_isolated:
+#            # Dest has ingress restrictions, check if ingress from source is allowed
+#            if not self._is_ingress_allowed(source_pod, dest_pod):
+#                return False
+#
+#        return True
+#
+#
+#    def _is_pod_ingress_isolated(self, pod):
+#        """
+#        Check if a pod is ingress-isolated.
+#        A pod is ingress-isolated if ANY NetworkPolicy in pod's namespace selects it and has 'Ingress' in policyTypes.
+#        """
+#        pod_ns = pod.name.split(":")[0]
+#
+#        for policy in self.all_netPols:
+#            if policy.name.split(":")[0] != pod_ns:
+#                continue
+#
+#            if self._policy_selects_pod(policy, pod):
+#                policy_types = policy.policy_types if policy.policy_types else []
+#                # Check if Ingress is explicitly in policyTypes
+#                if "Ingress" in policy_types:
+#                    return True
+#                
+#        return False
+#
+#
+#    def _is_pod_egress_isolated(self, pod):
+#        """
+#        Check if a pod is egress-isolated.
+#        A pod is egress-isolated if ANY NetworkPolicy in pod's namespace selects it and has 'Egress' in policyTypes.
+#        """
+#        pod_ns = pod.name.split(":")[0]
+#
+#        for policy in self.all_netPols:
+#            if policy.name.split(":")[0] != pod_ns:
+#                continue
+#
+#            if self._policy_selects_pod(policy, pod):
+#                policy_types = policy.policy_types if policy.policy_types else []
+#                # Check if Egress is explicitly in policyTypes
+#                if "Egress" in policy_types:
+#                    return True
+#
+#        return False
+#
+#
+#    def _is_ingress_allowed(self, source_pod, dest_pod):
+#        """
+#        Check if ingress from source to dest is allowed by dest's ingress policies.
+#        Policies are ADDITIVE: if ANY policy allows it, it's allowed.
+#        """
+#        dest_pod_ns = dest_pod.name.split(":")[0]
+#
+#        for policy in self.all_netPols:
+#            policy_ns = policy.name.split(":")[0]
+#            if policy_ns != dest_pod_ns:
+#                continue
+#
+#            if not self._policy_selects_pod(policy, dest_pod):
+#                continue
+#
+#            policy_types = policy.policy_types if policy.policy_types else []
+#            if "Ingress" not in policy_types and not (policy.policy_types == [] and policy.ingress_rules):
+#                continue
+#
+#            # Empty ingress rules with Ingress policyType = deny all
+#            try:
+#                ingress_rules = json.loads(policy.ingress_rules) if policy.ingress_rules else []
+#            except Exception as e:
+#                self.logger.warning(f"Failed to parse ingress_rules for policy {policy.name}: {e}")
+#                ingress_rules = []
+#            if not ingress_rules:
+#                # Policy selects this pod and has Ingress in policyTypes but no rules = deny all for this policy
+#                # Continue checking other policies
+#                continue
+#
+#            for rule in ingress_rules:
+#                from_selectors = rule.get("from", [])
+#                if not from_selectors:
+#                    return True
+#
+#                for selector in from_selectors:
+#                    if self._pod_matches_peer_selector(source_pod, selector, policy_ns):
+#                        return True
+#
+#        return False
+#
+#
+#    def _is_egress_allowed(self, source_pod, dest_pod):
+#        """
+#        Check if egress from source to dest is allowed by source's egress policies.
+#        Policies are ADDITIVE: if ANY policy allows it, it's allowed.
+#        """
+#        source_pod_ns = source_pod.name.split(":")[0]
+#
+#        for policy in self.all_netPols:
+#            policy_ns = policy.name.split(":")[0]
+#            if policy_ns != source_pod_ns:
+#                continue
+#
+#            if not self._policy_selects_pod(policy, source_pod):
+#                continue
+#
+#            policy_types = policy.policy_types if policy.policy_types else []
+#            if "Egress" not in policy_types and not (policy.policy_types == [] and policy.egress_rules):
+#                continue
+#
+#            # Empty egress rules with Egress policyType = deny all
+#            try:
+#                egress_rules = json.loads(policy.egress_rules) if policy.egress_rules else []
+#            except Exception as e:
+#                self.logger.warning(f"Failed to parse egress_rules for policy {policy.name}: {e}")
+#                egress_rules = []
+#            if not egress_rules:
+#                # Policy selects this pod and has Egress in policyTypes but no rules = deny all for this policy
+#                # Continue checking other policies
+#                continue
+#
+#            for rule in egress_rules:
+#                to_selectors = rule.get("to", [])
+#                if not to_selectors:
+#                    return True
+#
+#                for selector in to_selectors:
+#                    if self._pod_matches_peer_selector(dest_pod, selector, policy_ns):
+#                        return True
+#
+#        return False
+#
+#
+#    def _ip_matches_cidr(self, ip, cidr, except_cidrs=None):
+#        """
+#        Check if an IP address matches a CIDR block, excluding exception CIDRs.
+#
+#        Args:
+#            ip: IP address to check
+#            cidr: CIDR block to match against
+#            except_cidrs: List of CIDR blocks to exclude
+#        """
+#        try:
+#            import ipaddress
+#            ip_obj = ipaddress.ip_address(ip)
+#            network = ipaddress.ip_network(cidr)
+#
+#            # Check if IP is in the main CIDR
+#            if ip_obj not in network:
+#                return False
+#
+#            # Check if IP is in any exception CIDR
+#            if except_cidrs:
+#                for except_cidr in except_cidrs:
+#                    except_network = ipaddress.ip_network(except_cidr)
+#                    if ip_obj in except_network:
+#                        return False
+#
+#            return True
+#        except Exception as e:
+#            self.logger.warning(f"Failed to check IP {ip} against CIDR {cidr}: {e}")
+#            return False
+#
+#    def _pod_matches_peer_selector(self, pod, peer_selector, policy_ns):
+#        """
+#        Check if a pod matches a network policy peer selector (from/to).
+#
+#        - podSelector alone: matches pods in policy's namespace only
+#        - namespaceSelector alone: matches all pods in matching namespaces
+#        - both: matches specific pods in matching namespaces
+#        - ipBlock: matches pods based on their IP address (if available)
+#        """
+#        pod_ns = pod.name.split(":")[0]
+#        pod_ns_obj = K8sNamespace.get_by_kwargs(f'_.name = "{pod_ns}"')
+#
+#        # Handle ipBlock
+#        if "ipBlock" in peer_selector:
+#            ip_block = peer_selector["ipBlock"]
+#            cidr = ip_block.get("cidr")
+#            except_cidrs = ip_block.get("except", [])
+#
+#            # Check if pod has an IP address
+#            pod_ip = getattr(pod, 'pod_ip')
+#            if pod_ip:
+#                return self._ip_matches_cidr(pod_ip, cidr, except_cidrs)
+#            else:
+#                # If pod doesn't have IP info, we can't evaluate ipBlock rules
+#                # Log a warning and conservatively deny
+#                self.logger.debug(f"Pod {pod.name} has no IP address, cannot evaluate ipBlock rule")
+#                return False
+#
+#        # Handle podSelector
+#        if "podSelector" in peer_selector:
+#            pod_selector = peer_selector["podSelector"].get("matchLabels", {})
+#            pod_match_expressions = peer_selector["podSelector"].get("matchExpressions")
+#
+#            # If there's also a namespaceSelector, pod must be in matching namespace
+#            if "namespaceSelector" in peer_selector:
+#                ns_selector = peer_selector["namespaceSelector"].get("matchLabels", {})
+#                ns_match_expressions = peer_selector["namespaceSelector"].get("matchExpressions")
+#                if not pod_ns_obj or not self._namespace_matches_selector(pod_ns_obj, ns_selector, ns_match_expressions):
+#                    return False
+#            else:
+#                # podSelector alone: only matches pods in the policy's own namespace
+#                if pod_ns != policy_ns:
+#                    return False
+#
+#            # Check if pod matches the pod selector
+#            return self._pod_matches_selector(pod, pod_selector, pod_match_expressions)
+#
+#        # Handle namespaceSelector without podSelector
+#        elif "namespaceSelector" in peer_selector:
+#            ns_selector = peer_selector["namespaceSelector"].get("matchLabels", {})
+#            ns_match_expressions = peer_selector["namespaceSelector"].get("matchExpressions")
+#            if pod_ns_obj:
+#                return self._namespace_matches_selector(pod_ns_obj, ns_selector, ns_match_expressions)
+#
+#        return False
+#
+#
+#    def _matches_label_selector_expression(self, labels, match_expression):
+#        """
+#        Check if labels match a single matchExpression.
+#        Supports operators: In, NotIn, Exists, DoesNotExist
+#        """
+#        key = match_expression.get("key")
+#        operator = match_expression.get("operator")
+#        values = match_expression.get("values", [])
+#
+#        if operator == "In":
+#            return labels.get(key) in values
+#        elif operator == "NotIn":
+#            return labels.get(key) not in values
+#        elif operator == "Exists":
+#            return key in labels
+#        elif operator == "DoesNotExist":
+#            return key not in labels
+#        else:
+#            self.logger.warning(f"Unknown matchExpression operator: {operator}")
+#            return False
+#
+#    def _pod_matches_selector(self, pod, selector, match_expressions=None):
+#        """
+#        Check if a pod matches a label selector.
+#        None = none selected
+#        {} = all selected
+#        """
+#        # Null selector matches no objects
+#        if selector is None and (match_expressions is None or len(match_expressions) == 0):
+#            return False
+#
+#        # Empty dict selector and no expressions matches all objects
+#        if selector == {} and (match_expressions is None or len(match_expressions) == 0):
+#            return True
+#
+#        try:
+#            pod_labels = json.loads(pod.labels) if pod.labels else {}
+#        except:
+#            pod_labels = {}
+#
+#        # All selector labels must match (matchLabels)
+#        if selector:
+#            for key, value in selector.items():
+#                if pod_labels.get(key) != value:
+#                    return False
+#
+#        # All match expressions must match (matchExpressions)
+#        if match_expressions:
+#            for expr in match_expressions:
+#                if not self._matches_label_selector_expression(pod_labels, expr):
+#                    return False
+#
+#        return True
+#
+#    def _policy_selects_pod(self, policy, pod):
+#        """Check if a network policy selects a specific pod"""
+#        try:
+#            pod_selector = json.loads(policy.pod_selector) if policy.pod_selector else None
+#        except Exception as e:
+#            self.logger.warning(f"Failed to parse pod_selector for policy {policy.name}: {e}")
+#            pod_selector = {}
+#        return self._pod_matches_selector(pod, pod_selector)
+#
+#
+#    def _namespace_matches_selector(self, namespace, selector, match_expressions=None):
+#        """
+#        Check if a namespace matches a label selector.
+#
+#        Args:
+#            namespace: The namespace to check
+#            selector: Dict of matchLabels (all must match - AND logic). None = no match, {} = match all
+#            match_expressions: List of matchExpressions (all must match - AND logic). None or [] = ignored
+#
+#        Note: An empty label selector (selector={} and no match_expressions) matches all objects.
+#              A null label selector (selector=None and match_expressions=None) matches no objects.
+#        """
+#        # Null selector matches no objects
+#        if selector is None and (match_expressions is None or len(match_expressions) == 0):
+#            return False
+#
+#        # Empty dict selector and no expressions matches all objects
+#        if selector == {} and (match_expressions is None or len(match_expressions) == 0):
+#            return True
+#
+#        try:
+#            ns_labels = json.loads(namespace.labels) if namespace.labels else {}
+#        except Exception as e:
+#            self.logger.warning(f"Failed to parse namespace labels for {namespace.name}: {namespace.labels}. Error: {e}")
+#            ns_labels = {}
+#
+#        # All selector labels must match (matchLabels)
+#        if selector:
+#            for key, value in selector.items():
+#                self.logger.debug(f"Trying namespace match: key={key}, value={value}, nsVal={ns_labels.get(key)}, nsLabels={ns_labels}, match?={ns_labels.get(key) == value}")
+#                if ns_labels.get(key) != value:
+#                    return False
+#
+#        # All match expressions must match (matchExpressions)
+#        if match_expressions:
+#            for expr in match_expressions:
+#                if not self._matches_label_selector_expression(ns_labels, expr):
+#                    return False
+#
+#        return True
+#

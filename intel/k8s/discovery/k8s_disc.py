@@ -66,6 +66,81 @@ class K8sDisc(K8sDiscClient):
         self.cred = cred["cred"]
         return True
 
+    @staticmethod
+    def _eval_labelSelector(label_selector: dict, pod) -> bool:
+        """
+        Evaluate if a pod matches a V1LabelSelector.
+
+        Args:
+            label_selector: Dict representation of V1LabelSelector with 'matchLabels' and/or 'matchExpressions'
+            pod: Pod object with a 'labels' field (JSON string of labels)
+
+        Returns:
+            True if pod matches the selector, False otherwise
+
+        Kubernetes label selector logic:
+        - Empty selector {} matches all pods
+        - None/null selector matches no pods
+        - matchLabels: all labels must match (AND logic)
+        - matchExpressions: all expressions must match (AND logic)
+        - matchLabels AND matchExpressions are also ANDed together
+        """
+
+        # Parse pod labels (stored as JSON string)
+        try:
+            pod_labels = json.loads(pod.labels) if pod.labels else {}
+        except Exception:
+            pod_labels = {}
+
+        # Handle null selector - matches nothing
+        if label_selector is None:
+            return False
+
+        # Handle empty selector - matches everything
+        if not label_selector or (not label_selector.get('matchLabels') and not label_selector.get('matchExpressions')):
+            return True
+
+        # Check matchLabels
+        match_labels = label_selector.get('matchLabels', {})
+        if match_labels:
+            for key, value in match_labels.items():
+                if pod_labels.get(key) != value:
+                    return False
+
+        # Check matchExpressions
+        match_expressions = label_selector.get('matchExpressions', [])
+        if match_expressions:
+            for expr in match_expressions:
+                key = expr.get('key')
+                operator = expr.get('operator')
+                values = expr.get('values', [])
+
+                if operator == 'In':
+                    # Label value must be in the values list
+                    if pod_labels.get(key) not in values:
+                        return False
+
+                elif operator == 'NotIn':
+                    # Label value must not be in the values list
+                    if pod_labels.get(key) in values:
+                        return False
+
+                elif operator == 'Exists':
+                    # Label key must exist (regardless of value)
+                    if key not in pod_labels:
+                        return False
+
+                elif operator == 'DoesNotExist':
+                    # Label key must not exist
+                    if key in pod_labels:
+                        return False
+
+                else:
+                    # Unknown operator - log and fail conservatively
+                    K8sDisc.logger.warning(f"Unknown label selector operator: {operator}")
+                    return False
+
+        return True
 
     # This is so scuffed
     def _pod_selector(self, orig: K8sBasicModel, match_labels: dict):
