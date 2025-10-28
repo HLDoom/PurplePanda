@@ -67,13 +67,14 @@ class K8sDisc(K8sDiscClient):
         return True
 
 
-    def _pod_selector(self, orig: K8sPodTemplate, dict_of_labels):
+    # This is so scuffed
+    def _pod_selector(self, orig: K8sBasicModel, match_labels: dict):
         """Given an origin and a dictionary of labels, find the related pods"""
 
         # Get resources using the service
-        if dict_of_labels:
-            search_str = " AND ".join([ f'((_.labels =~ ".*{k}.*" AND _.labels =~ ".*{v}.*") OR _.name = "{v}")' for k,v in dict_of_labels.items()])
-            ress = K8sPod.get_all_by_kwargs(search_str)
+        if match_labels:
+            search_str = " AND ".join([ f'((_.labels =~ ".*{k}.*" AND _.labels =~ ".*{v}.*") OR _.name = "{v}")' for k,v in match_labels.items()])
+            ress = K8sPod.get_all_by_where_query(search_str)
             if not ress:
                 self.logger.warning(f"No resources found using service {orig.name} with search {search_str}")
 

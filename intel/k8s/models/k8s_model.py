@@ -212,7 +212,7 @@ class K8sPod(K8sContainsContainer, GcpRunningSA):
     services_attached = RelatedTo("K8sPod", "HAS_SERVICE")
     containspodtemplate = RelatedTo("K8sPodTemplate", "PART_OF")
     concourse_workers = RelatedTo("ConcourseWorker", "RUN_CONCOURSE")
-    can_connect_to = RelatedTo("K8sPod", "CAN_CONNECT")
+    can_connect_to = RelatedTo("K8sPod", "CAN_CONNECT") #TODO: Custom model with port and protocol
     network_policies = RelatedFrom("K8sNetworkPolicy", "APPLIES_TO")
 
     def __init__(self, *args, **kwargs):
@@ -583,7 +583,7 @@ class K8sNetworkPolicy(K8sBasicModelNS):
     pod_selector = Property()
     ingress_rules = Property()
     egress_rules = Property()
-    applies_to_pods = RelatedTo(K8sPod, "APPLIES_TO")
+    applies_to = RelatedTo(K8sPod, "APPLIES_TO")
 
     k8s = Label(name="K8s")
 
